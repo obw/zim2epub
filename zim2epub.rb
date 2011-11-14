@@ -1,0 +1,226 @@
+#!/usr/bin/env ruby
+
+$LOAD_PATH << '../zim-ruby/lib'
+$LOAD_PATH << 'lib'
+
+require 'rubygems'
+require 'zim'
+require 'nokogiri'
+require 'eeepub'
+require 'cgi'
+require 'optparse'
+
+require 'zim2epub/zim_ext'
+require 'zim2epub/mapping'
+
+$options = {
+  :tmp => nil,
+  :excludes => Array.new,
+  :articles => nil,
+  :list => false,
+  :wikipedia => false,
+  :toc => true,
+  :tocsite => nil,
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = 'zim2epub [options] <zimfile> [epubfile]'
+
+  opts.on('-l', '--list', 'list articles') do
+    $options[:list] = true
+  end
+
+  opts.on('-w', '--[no-]wikipedia', 'set wikipedia mode') do |arg|
+    $options[:wikipedia] = arg
+  end
+
+  opts.on('--[no-]toc', 'keep or remove toc') do |arg|
+    $options[:toc] = arg
+  end
+
+  opts.on('--tocsite=regexp', 'use toc to generate navigation') do |arg|
+    $options[:tocsite] = arg
+  end
+
+  opts.on('-t', '--tmp=directory', 'set temporary directory') do |arg|
+    $options[:tmp] = arg
+  end
+
+  opts.on('-e', '--exclude=url', 'exclude a given article (can be specified multiple times)') do |arg|
+    $options[:excludes] << arg
+  end
+
+  opts.on('-a', '--articles=@file|regexp', 'add article list @file or add article') do |arg|
+    $options[:articles] ||= Array.new
+
+    if arg =~ /^@/
+      $options[:articles] |= IO::readlines(arg[1, arg.size]).map { |x| x.chomp }
+    else
+      $options[:articles] << arg
+    end
+  end
+end
+
+parser.parse!
+
+if ARGV.size < 1
+  puts parser
+  exit 1
+end
+
+file = ARGV[0]
+out = ARGV[1] || "#{File.basename(file, '.zim')}.epub"
+$options[:tmp] ||= Dir.mktmpdir
+
+image_map = Mapping.new
+link_map = Mapping.new
+article_map = Hash.new
+images = Array.new
+meta = Hash.new
+
+zim = Zim::ZimFile.new(file)
+
+if $options[:list]
+  zim.urls.each do |url|
+    puts url.url if url.namespace == 'A'
+  end
+  exit 0
+end
+
+if !$options[:articles].nil? && !$options[:tocsite].nil?
+  puts 'cannot use -a and --tocsite at the same time!'
+  exit 1
+end
+
+FileUtils.mkdir_p($options[:tmp])
+
+if !$options[:articles].nil?
+  puts 'mapping articles ...'
+
+  $options[:articles].map! do |x|
+    reg = Regexp.new(x)
+    url = zim.urls.select { |u| u.url =~ reg }
+
+    raise "no article matches '#{x}'!" if url.empty?
+    raise "more than one article matches '#{x}'!" if url.size > 1
+
+    url.first
+  end
+elsif !$options[:tocsite].nil?
+  puts 'reading toc ...'
+
+  reg = Regexp.new($options[:tocsite])
+  url = zim.urls.select { |u| u.url =~ reg }
+
+  raise "no article matches '#{$options[:tocsite]}'!" if url.empty?
+  raise "more than one article matches '#{$options[:tocsite]}'!" if url.size > 1
+
+  $options[:articles] = Array.new
+
+  xml = Nokogiri::XML(url.first.blob)
+  xml.xpath('//a').each do |node|
+    url = zim.urls.select { |u| u.to_s == CGI::unescape(node['href']) }
+
+    raise "no article matches href in toc" if url.empty?
+    raise "more than one article matches href in toc" if url.size > 1
+
+    $options[:articles] << url.first
+  end
+end
+
+puts 'creating images + mappings ...'
+zim.urls.each do |url|
+  case url.namespace
+  when 'I'
+    image_map << url
+    link_map << url
+    images << url.filename
+    File.new("#{$options[:tmp]}/#{url.filename}", 'w').write(url.blob)
+  when 'A'
+    link_map << url
+  when 'M'
+    meta[url.url] = url.blob
+  end
+end
+
+puts 'creating articles ...'
+
+if $options[:articles].nil?
+  urls = zim.urls
+else
+  urls = $options[:articles]
+end
+
+urls.each do |url|
+  next if url.namespace != 'A'
+  next if $options[:excludes].include?(url.url)
+
+  puts url.url
+
+  article_map[url.to_s] = url
+
+  case url.mime_type
+  when 'text/html'
+    xml = Nokogiri::XML(url.blob)
+
+    xml.create_internal_subset('html', '-//W3C//DTD XHTML 1.1//EN', 'http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd')
+
+    xml.root.name = 'html'
+    xml.root['xmlns'] = 'http://www.w3.org/1999/xhtml'
+
+    body = xml.create_element('body')
+    xml.root.children.each do |node|
+      node.parent = body if node.name != 'head'
+    end
+    xml.root.add_child(body)
+
+    if $options[:wikipedia]
+      xml.xpath('//link').each { |node| node.remove }
+      xml.css('.noprint').each { |node| node.remove }
+      xml.css('.editsection').each { |node| node.remove }
+      unless $options[:toc]
+        xml.css('#toc').each { |node| node.remove }
+      end
+    end
+
+    xml.xpath('//a').each do |node|
+      node['href'] = link_map[node['href']]
+    end
+
+    xml.xpath('//img').each do |node|
+      node['src'] = image_map[node['src']]
+    end
+
+    xml.write_xml_to(File.new("#{$options[:tmp]}/#{url.filename}", 'w'))
+  else
+    raise "Unsupported article mime type: #{url.mime_type}"
+  end
+end
+
+epub = EeePub.make do
+  title meta['Title']
+  creator meta['Creator']
+  date meta['Date']
+  uid 'BookId'
+  identifier meta['Source'], :schema => 'URL', :id => 'BookId'
+
+  if $options[:articles].nil?
+    files Dir.glob("#{$options[:tmp]}/*").delete_if { |f| File.directory?(f) }.sort
+  else
+    f = $options[:articles].map { |x| "#{$options[:tmp]}/#{x.filename}" }
+    f |= images.map { |x| "#{$options[:tmp]}/#{x}" }
+    files f
+  end
+
+  if $options[:articles].nil?
+    nav article_map.to_a.map { |a| { :label => a[1].url, :content => a[1].filename } }.sort { |a, b| a[:label] <=> b[:label] }
+  else
+    nav $options[:articles].map { |a|
+      { :label => a.url, :content => a.filename }
+    }
+  end
+end
+epub.save(out)
+
+FileUtils.rm_rf($options[:tmp])
+
