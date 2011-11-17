@@ -1,6 +1,5 @@
 #!/usr/bin/env ruby
 
-$LOAD_PATH << '../zim-ruby/lib'
 $LOAD_PATH << 'lib'
 
 require 'rubygems'
