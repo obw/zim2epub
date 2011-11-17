@@ -41,10 +41,6 @@ parser = OptionParser.new do |opts|
     $options[:tocsite] = arg
   end
 
-  opts.on('-t', '--tmp=directory', 'set temporary directory') do |arg|
-    $options[:tmp] = arg
-  end
-
   opts.on('-e', '--exclude=url', 'exclude a given article (can be specified multiple times)') do |arg|
     $options[:excludes] << arg
   end
@@ -57,6 +53,10 @@ parser = OptionParser.new do |opts|
     else
       $options[:articles] << arg
     end
+  end
+
+  opts.on('-t', '--tmp=directory', 'set temporary directory') do |arg|
+    $options[:tmp] = arg
   end
 end
 
