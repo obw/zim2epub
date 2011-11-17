@@ -11,7 +11,7 @@ Gem::Specification.new do |s|
   s.description = %q{Convert zim files (for example exported from wikipedia) to epub format for reading on ebook readers.}
   s.has_rdoc    = false
 
-  s.add_dependency 'zim'
+  s.add_dependency 'zim-ruby'
   s.add_dependency 'nokogiri'
   s.add_dependency 'eeepub'
 
