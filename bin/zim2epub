@@ -154,6 +154,8 @@ urls.each do |url|
   next if url.namespace != 'A'
   next if $options[:excludes].include?(url.url)
 
+  url = url.final_url
+
   puts url.url
 
   article_map[url.to_s] = url

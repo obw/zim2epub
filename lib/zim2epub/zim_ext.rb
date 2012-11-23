@@ -1,15 +1,24 @@
 module Zim
   class Url
     def ext
-      case @mime_type
+      url = final_url
+      case url.mime_type
+      when 'text/plain'
+        'txt'
       when 'text/html'
         'html'
       when 'image/png'
         'png'
       when 'image/jpeg'
         'jpg'
+      when 'image/gif'
+        'gif'
+      when 'application/javascript'
+        'js'
+      when 'text/css'
+        'css'
       else
-        raise "Unsupported mime type: #{self.mime_type}"
+        raise "Unsupported mime type: #{url.mime_type}"
       end
     end
 
